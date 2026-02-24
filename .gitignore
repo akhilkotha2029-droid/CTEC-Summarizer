@@ -1,0 +1,5 @@
+node_modules/
+pw-profile/
+profile/
+.env
+.DS_Store
