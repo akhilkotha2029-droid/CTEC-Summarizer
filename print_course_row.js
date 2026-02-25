@@ -1,5 +1,5 @@
 // print_course_row.js
-// Open CAESAR -> wait for Search CTECs dropdowns -> select Undergraduate + subject -> Search -> print first 5 rows.
+// Open CAESAR -> wait for Search CTECs dropdowns -> select Undergraduate + subject -> search -> select course -> print rows
 // Usage: node print_course_row.js "COMP_SCI 212"
 
 const { chromium } = require("playwright");
@@ -115,11 +115,73 @@ async function main() {
   const links = await frame.$$('a:has-text("Get List of CTECs")');
   console.log(`Found ${links.length} course rows.`);
 
-  const limit = Math.min(5, links.length);
-  for (let i = 0; i < limit; i++) {
-    const rowText = await links[i].evaluate((a) => a.closest("tr")?.innerText || "");
-    console.log("-", norm(rowText));
+// Find the exact course row that starts with your number (e.g., "212-0:")
+let targetLink = null;
+let targetRowText = null;
+
+for (let i = 0; i < links.length; i++) {
+  const rowText = norm(
+    await links[i].evaluate((a) => a.closest("tr")?.innerText || "")
+  );
+
+  if (rowText.startsWith(number + ":")) {
+    targetLink = links[i];
+    targetRowText = rowText;
+    break;
   }
+}
+
+if (!targetLink) {
+  console.error(`Could not find course ${number}`);
+  await context.close();
+  return;
+}
+
+console.log("\nMatched course:");
+console.log(targetRowText);
+
+// Click "Get List of CTECs"
+await targetLink.click();
+
+// Wait for evaluation rows page
+await frame.waitForSelector('a:has-text("View Evaluation")', { timeout: 0 });
+
+const evalLinks = await frame.$$('a:has-text("View Evaluation")');
+
+console.log(`\nFound ${evalLinks.length} evaluation links. Parsed reports:\n`);
+
+let printed = 0;
+
+for (const link of evalLinks) {
+  const rowHandle = await link.evaluateHandle((a) => a.closest("tr"));
+  const row = rowHandle.asElement();
+  if (!row) continue;
+
+  const cells = await row.$$("td");
+  if (cells.length < 2) continue;
+
+  const termText = norm(await cells[0].innerText());
+  const descText = norm(await cells[1].innerText());
+
+  // Skip header-ish junk rows
+  // Real terms look like "2025 Fall", "2024 Sprng", etc.
+  const looksLikeTerm = /^\d{4}\s+(Fall|Wintr|Sprng|Summr)$/i.test(termText);
+  if (!looksLikeTerm) continue;
+
+  // Instructor is usually somewhere in parentheses in the description
+  // Grab the LAST parenthetical group if present:
+  let instructor = "Unknown";
+  const parens = [...descText.matchAll(/\(([^)]+)\)/g)].map((m) => m[1]);
+  if (parens.length > 0) instructor = parens[parens.length - 1];
+
+  console.log(`- ${termText} | Instructor: ${instructor} | ${descText}`);
+  printed += 1;
+}
+
+// Optional sanity check:
+if (printed === 0) {
+  console.log("No report rows matched the expected term format. If this happens, we'll adjust the term regex.");
+}
 
   await context.close();
 }
