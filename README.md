@@ -6,7 +6,7 @@ This project is a automation tool to help search and summarize Northwestern CTEC
 
 The long-term goal is to input a course number (ex: `COMP_SCI 212`) and generate an AI-based summary of student feedback, including workload, difficulty, and professor feedback.
 
-This is intended for my personal academic planning.
+End goal is for me to be able to find optimal classes to fulfill distribution/major requirements, best professors, etc.
 
 ---
 
