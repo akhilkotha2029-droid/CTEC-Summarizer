@@ -18,6 +18,8 @@ Completed:
 
 * Git repository setup
 * Project file structure created
+* Input refactoring 
+* Login to CTEC website/Caesar
 
 Planned:
 
