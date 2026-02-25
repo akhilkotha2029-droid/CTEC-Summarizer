@@ -1,0 +1,24 @@
+{
+  "name": "ctecsummarizer",
+  "version": "1.0.0",
+  "description": "This project is a automation tool to help search and summarize Northwestern CTEC (Course and Teacher Evaluation Council) reviews.",
+  "main": "print_course_row.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akhilkotha2029-droid/CTEC-Summarizer.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/akhilkotha2029-droid/CTEC-Summarizer/issues"
+  },
+  "homepage": "https://github.com/akhilkotha2029-droid/CTEC-Summarizer#readme",
+  "dependencies": {
+    "playright": "^0.0.22"
+  }
+}
