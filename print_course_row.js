@@ -1,10 +1,6 @@
 // print_course_row.js
-//
-// Open CAESAR Search CTECs in a real browser, let user log in,
-// then confirm we reached the Search CTECs page.
-//
-// Usage (still just prints parsed input + checks login page reached):
-// node print_course_row.js "COMP_SCI 212"
+// Open CAESAR -> wait for Search CTECs dropdowns -> select Undergraduate + subject -> Search -> print first 5 rows.
+// Usage: node print_course_row.js "COMP_SCI 212"
 
 const { chromium } = require("playwright");
 
@@ -13,41 +9,56 @@ const START_URL =
 
 function parseCourseArg(argv) {
   const raw = argv.slice(2).join(" ").trim();
-
-  if (!raw) {
-    throw new Error('Missing input. Example: node print_course_row.js "COMP_SCI 212"');
-  }
+  if (!raw) throw new Error('Missing input. Example: node print_course_row.js "COMP_SCI 212"');
 
   const match = raw.match(/^([A-Z_]+)\s+([0-9]+(?:-[A-Z0-9]+)?)$/);
-  if (!match) {
-    throw new Error(
-      `Invalid input: "${raw}". Use format like "COMP_SCI 212" or "COMP_SCI 212-1".`
-    );
-  }
+  if (!match) throw new Error(`Invalid input: "${raw}". Use "COMP_SCI 212" or "COMP_SCI 212-1".`);
 
   const subject = match[1];
   let number = match[2];
-
-  // Default to -0 if no suffix
-  if (!number.includes("-")) number = `${number}-0`;
-
-  return { subject, number, raw };
+  if (!number.includes("-")) number = `${number}-0`; // your rule
+  return { subject, number };
 }
 
-async function waitForEnter(message) {
-  console.log(message);
-  await new Promise((resolve) => process.stdin.once("data", resolve));
+function norm(s) {
+  return (s || "").replace(/\s+/g, " ").trim();
+}
+
+// Find frame that contains a selector
+async function waitForFrameWithSelector(page, selector) {
+  while (true) {
+    for (const f of page.frames()) {
+      try {
+        const el = await f.$(selector);
+        if (el) {
+          await el.dispose();
+          return f;
+        }
+      } catch {}
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+async function selectByLabelMatch(frame, selectSelector, matcherFn) {
+  await frame.waitForSelector(selectSelector, { state: "visible", timeout: 0 });
+
+  const options = await frame.$$(selectSelector + " option");
+  for (const opt of options) {
+    const label = norm(await opt.innerText());
+    const value = await opt.getAttribute("value");
+    if (matcherFn(label)) {
+      await frame.selectOption(selectSelector, value);
+      return label;
+    }
+  }
+  throw new Error(`No matching option found for selector ${selectSelector}`);
 }
 
 async function main() {
-  const { subject, number, raw } = parseCourseArg(process.argv);
+  const { subject, number } = parseCourseArg(process.argv);
+  console.log(`Input normalized -> Subject: ${subject}, Number: ${number}`);
 
-  console.log("Parsed course input:");
-  console.log(`- Raw:     ${raw}`);
-  console.log(`- Subject: ${subject}`);
-  console.log(`- Number:  ${number}`);
-
-  // Persistent profile so you only log in once:
   const context = await chromium.launchPersistentContext("./pw-profile", {
     headless: false,
     slowMo: 50,
@@ -56,28 +67,64 @@ async function main() {
   const page = context.pages()[0] ?? (await context.newPage());
   await page.goto(START_URL, { waitUntil: "domcontentloaded" });
 
-  await waitForEnter(
-    "\nIf redirected to Northwestern login, sign in (NetID + Duo).\n" +
-      "When you can see the 'Search CTECs' page, press Enter here.\n"
+  console.log(
+    "If you see Northwestern login, complete NetID + Duo in the browser.\n" +
+      "This will continue automatically once the Search CTECs dropdowns exist."
   );
 
-  const bodyText = await page.locator("body").innerText();
-  const looksRight =
-    bodyText.includes("Search CTECs") ||
-    bodyText.includes("Course and Teacher Evaluations");
+  const CAREER_SEL = "#NW_CT_PB_SRCH_ACAD_CAREER";
+  const SUBJECT_SEL = "#NW_CT_PB_SRCH_SUBJECT";
 
-  console.log("\nReached Search CTECs page:", looksRight ? "YES" : "NOT SURE");
+  // Find the frame that contains the career dropdown
+  const frame = await waitForFrameWithSelector(page, CAREER_SEL);
+  console.log("Found Search CTECs frame");
+  console.log("Frame URL:", frame.url());
 
-  if (!looksRight) {
-    console.log(
-      "If this says NOT SURE, it's usually fine—just make sure you're actually on the Search CTECs page."
-    );
+  // Select Undergraduate (by label)
+  const careerChosen = await selectByLabelMatch(
+    frame,
+    CAREER_SEL,
+    (label) => label.toLowerCase() === "undergraduate"
+  );
+  console.log(`Set Academic Career = ${careerChosen}`);
+
+  // Wait for subject options to load after career selection
+  await frame.waitForFunction(
+    (sel) => {
+      const s = document.querySelector(sel);
+      return s && s.options && s.options.length > 1;
+    },
+    SUBJECT_SEL,
+    { timeout: 0 }
+  );
+
+  // Select subject (match option label starting with "COMP_SCI")
+  // Options look like: "COMP_SCI - Computer Science"
+  const subjChosen = await selectByLabelMatch(frame, SUBJECT_SEL, (label) => {
+    return label.startsWith(subject + " ");
+  });
+  console.log(`Set Academic Subject = ${subjChosen}`);
+
+  // Click Search
+  await frame.click('input[value="Search"]');
+
+  // Wait for results
+  await frame.waitForSelector('a:has-text("Get List of CTECs")', { timeout: 0 });
+
+  // Print first 5 rows
+  const links = await frame.$$('a:has-text("Get List of CTECs")');
+  console.log(`Found ${links.length} course rows.`);
+
+  const limit = Math.min(5, links.length);
+  for (let i = 0; i < limit; i++) {
+    const rowText = await links[i].evaluate((a) => a.closest("tr")?.innerText || "");
+    console.log("-", norm(rowText));
   }
 
   await context.close();
 }
 
 main().catch((err) => {
-  console.error(`Error: ${err.message}`);
+  console.error("Error:", err.message);
   process.exit(1);
 });
