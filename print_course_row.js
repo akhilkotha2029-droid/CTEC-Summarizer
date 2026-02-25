@@ -1,11 +1,16 @@
 // print_course_row.js
-// Open CAESAR -> wait for Search CTECs dropdowns -> select Undergraduate + subject -> search -> select course -> print rows
+// Open CAESAR -> wait for Search CTECs dropdowns -> select Undergraduate + subject -> search
+// -> select course -> open evaluation list -> open first real evaluation -> extract key stats
+//
 // Usage: node print_course_row.js "COMP_SCI 212"
 
 const { chromium } = require("playwright");
 
 const START_URL =
   "https://caesar.ent.northwestern.edu/psp/csnu_6/EMPLOYEE/SA/c/NWCT.NW_CT_PUBLIC_VIEW.GBL";
+
+// set true if you want to print every evaluation row in the list:
+const DEBUG_LIST_EVAL_ROWS = false;
 
 function parseCourseArg(argv) {
   const raw = argv.slice(2).join(" ").trim();
@@ -55,6 +60,10 @@ async function selectByLabelMatch(frame, selectSelector, matcherFn) {
   throw new Error(`No matching option found for selector ${selectSelector}`);
 }
 
+function looksLikeTerm(termText) {
+  return /^\d{4}\s+(Fall|Wintr|Sprng|Summr)$/i.test(termText);
+}
+
 async function main() {
   const { subject, number } = parseCourseArg(process.argv);
   console.log(`Input normalized -> Subject: ${subject}, Number: ${number}`);
@@ -72,13 +81,14 @@ async function main() {
       "This will continue automatically once the Search CTECs dropdowns exist."
   );
 
+  // Correct IDs (discovered from your dump)
   const CAREER_SEL = "#NW_CT_PB_SRCH_ACAD_CAREER";
   const SUBJECT_SEL = "#NW_CT_PB_SRCH_SUBJECT";
 
   // Find the frame that contains the career dropdown
   const frame = await waitForFrameWithSelector(page, CAREER_SEL);
   console.log("Found Search CTECs frame");
-  console.log("Frame URL:", frame.url());
+  // console.log("Frame URL:", frame.url()); // optional
 
   // Select Undergraduate (by label)
   const careerChosen = await selectByLabelMatch(
@@ -99,7 +109,6 @@ async function main() {
   );
 
   // Select subject (match option label starting with "COMP_SCI")
-  // Options look like: "COMP_SCI - Computer Science"
   const subjChosen = await selectByLabelMatch(frame, SUBJECT_SEL, (label) => {
     return label.startsWith(subject + " ");
   });
@@ -111,77 +120,149 @@ async function main() {
   // Wait for results
   await frame.waitForSelector('a:has-text("Get List of CTECs")', { timeout: 0 });
 
-  // Print first 5 rows
-  const links = await frame.$$('a:has-text("Get List of CTECs")');
-  console.log(`Found ${links.length} course rows.`);
+  const courseLinks = await frame.$$('a:has-text("Get List of CTECs")');
+  console.log(`Found ${courseLinks.length} course rows.`);
 
-// Find the exact course row that starts with your number (e.g., "212-0:")
-let targetLink = null;
-let targetRowText = null;
+  // Find the exact course row that starts with your number (e.g., "212-0:")
+  let targetLink = null;
+  let targetRowText = null;
 
-for (let i = 0; i < links.length; i++) {
-  const rowText = norm(
-    await links[i].evaluate((a) => a.closest("tr")?.innerText || "")
-  );
+  for (const link of courseLinks) {
+    const rowText = norm(await link.evaluate((a) => a.closest("tr")?.innerText || ""));
+    if (rowText.startsWith(number + ":")) {
+      targetLink = link;
+      targetRowText = rowText;
+      break;
+    }
+  }
 
-  if (rowText.startsWith(number + ":")) {
-    targetLink = links[i];
-    targetRowText = rowText;
+  if (!targetLink) {
+    console.error(`Could not find course ${number}`);
+    await context.close();
+    return;
+  }
+
+  console.log("\nMatched course:");
+  console.log(targetRowText);
+
+  // Click "Get List of CTECs"
+  await targetLink.click();
+
+  // Wait for evaluation list
+  await frame.waitForSelector('a:has-text("View Evaluation")', { timeout: 0 });
+
+  const evalLinks = await frame.$$('a:has-text("View Evaluation")');
+
+  // Find first REAL evaluation row (skip header/control rows)
+  let realEvalLink = null;
+  let realRowTerm = null;
+  let realRowDesc = null;
+
+  for (const link of evalLinks) {
+    const rowHandle = await link.evaluateHandle((a) => a.closest("tr"));
+    const row = rowHandle.asElement();
+    if (!row) continue;
+
+    const cells = await row.$$("td");
+    if (cells.length < 2) continue;
+
+    const termText = norm(await cells[0].innerText());
+    const descText = norm(await cells[1].innerText());
+
+    if (!looksLikeTerm(termText)) continue;
+
+    realEvalLink = link;
+    realRowTerm = termText;
+    realRowDesc = descText;
     break;
   }
+
+  if (!realEvalLink) {
+    throw new Error("Could not find a real evaluation row to open.");
+  }
+
+  if (DEBUG_LIST_EVAL_ROWS) {
+    console.log(`\nFound ${evalLinks.length} evaluation links. Listing rows:\n`);
+    for (const link of evalLinks) {
+      const rowHandle = await link.evaluateHandle((a) => a.closest("tr"));
+      const row = rowHandle.asElement();
+      if (!row) continue;
+
+      const cells = await row.$$("td");
+      if (cells.length < 2) continue;
+
+      const termText = norm(await cells[0].innerText());
+      const descText = norm(await cells[1].innerText());
+
+      if (!looksLikeTerm(termText)) continue;
+
+      let instructor = "Unknown";
+      const parens = [...descText.matchAll(/\(([^)]+)\)/g)].map((m) => m[1]);
+      if (parens.length > 0) instructor = parens[parens.length - 1];
+
+      console.log(`- ${termText} | Instructor: ${instructor} | ${descText}`);
+    }
+  }
+
+  console.log(`\nOpening evaluation for: ${realRowTerm} | ${realRowDesc}`);
+
+  // Click and capture popup if it opens a new tab/window
+  const popupPromise = page.waitForEvent("popup").catch(() => null);
+  await realEvalLink.click();
+
+  let evalPage = await popupPromise;
+  if (!evalPage) {
+    // No popup; assume same page navigated
+    evalPage = page;
+    await evalPage.waitForLoadState("domcontentloaded");
+  } else {
+    await evalPage.waitForLoadState("domcontentloaded");
+  }
+
+  await evalPage.waitForTimeout(1500);
+
+  const bodyText = await evalPage.locator("body").innerText();
+  const text = bodyText;
+
+  // helper to pull a single match
+  function pick(re, group = 1) {
+  const m = text.match(re);
+  if (!m) return null;
+  const val = m[group];
+  return typeof val === "string" ? val.trim() : null;
 }
 
-if (!targetLink) {
-  console.error(`Could not find course ${number}`);
-  await context.close();
-  return;
-}
+  // 1) Title + term
+  const reportTitle =
+    pick(/^Student Report for .*$/m) || pick(/^My Report Viewer\s*\n(.*)$/m);
+  const ctecTerm = pick(/Course and Teacher Evaluations CTEC\s+([A-Za-z]+\s+\d{4})/);
 
-console.log("\nMatched course:");
-console.log(targetRowText);
+  // 2) Responses info
+  const audience = pick(/Courses Audience\s*\n(\d+)/);
+  const received = pick(/Responses Received\s*\n(\d+)/);
+  const ratio = pick(/Response Ratio\s*\n([0-9.]+%)/);
 
-// Click "Get List of CTECs"
-await targetLink.click();
+  // 3) Means for key questions
+  function meanForQuestion(qStartsWith) {
+    const idx = text.indexOf(qStartsWith);
+    if (idx === -1) return null;
+    const window = text.slice(idx, idx + 1200);
+    const m = window.match(/Mean\s+([0-9.]+)/);
+    return m ? m[1] : null;
+  }
 
-// Wait for evaluation rows page
-await frame.waitForSelector('a:has-text("View Evaluation")', { timeout: 0 });
+  const meanInstruction = meanForQuestion("1. Provide an overall rating of the instruction.");
+  const meanCourse = meanForQuestion("2. Provide an overall rating of the course.");
 
-const evalLinks = await frame.$$('a:has-text("View Evaluation")');
-
-console.log(`\nFound ${evalLinks.length} evaluation links. Parsed reports:\n`);
-
-let printed = 0;
-
-for (const link of evalLinks) {
-  const rowHandle = await link.evaluateHandle((a) => a.closest("tr"));
-  const row = rowHandle.asElement();
-  if (!row) continue;
-
-  const cells = await row.$$("td");
-  if (cells.length < 2) continue;
-
-  const termText = norm(await cells[0].innerText());
-  const descText = norm(await cells[1].innerText());
-
-  // Skip header-ish junk rows
-  // Real terms look like "2025 Fall", "2024 Sprng", etc.
-  const looksLikeTerm = /^\d{4}\s+(Fall|Wintr|Sprng|Summr)$/i.test(termText);
-  if (!looksLikeTerm) continue;
-
-  // Instructor is usually somewhere in parentheses in the description
-  // Grab the LAST parenthetical group if present:
-  let instructor = "Unknown";
-  const parens = [...descText.matchAll(/\(([^)]+)\)/g)].map((m) => m[1]);
-  if (parens.length > 0) instructor = parens[parens.length - 1];
-
-  console.log(`- ${termText} | Instructor: ${instructor} | ${descText}`);
-  printed += 1;
-}
-
-// Optional sanity check:
-if (printed === 0) {
-  console.log("No report rows matched the expected term format. If this happens, we'll adjust the term regex.");
-}
+  console.log("\n=== Extracted Report Data ===");
+  console.log("Title:", reportTitle);
+  console.log("CTEC Term:", ctecTerm);
+  console.log("Audience:", audience);
+  console.log("Responses Received:", received);
+  console.log("Response Ratio:", ratio);
+  console.log("Mean (Instruction):", meanInstruction);
+  console.log("Mean (Course):", meanCourse);
+  console.log("=============================\n");
 
   await context.close();
 }
