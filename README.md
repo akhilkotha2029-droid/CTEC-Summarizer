@@ -20,10 +20,10 @@ Completed:
 * Project file structure created
 * Input refactoring 
 * Login to CTEC website/Caesar
+* Automated course search in Caesar
 
 Planned:
 
-* Automating course search via CAESAR
 * Open course review pages automatically
 * Extract review data
 * Generate AI summaries
