@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/akhilkotha2029-droid/CTEC-Summarizer#readme",
   "dependencies": {
+    "openai": "^6.25.0",
     "playright": "^0.0.22"
   }
 }
