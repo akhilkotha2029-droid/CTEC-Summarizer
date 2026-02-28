@@ -21,12 +21,16 @@ Completed:
 * Input refactoring 
 * Login to CTEC website/Caesar
 * Automated course search in Caesar
-
-Planned:
-
 * Open course review pages automatically
 * Extract review data
 * Generate AI summaries
+
+Planned:
+* Refactor code into multiple files for readability
+* Search for a specific instructor
+* Compare instructors and make decisions on which instructor to take a course with
+* Review a list of multiple courses and help user make decisions on what to take
+* Make a AI-powered chatbot that uses caesar data to inform course planning decisions
 
 ---
 
@@ -35,7 +39,7 @@ Planned:
 * JavaScript (Node.js)
 * Playwright (browser automation)
 * Git (version control)
-* LLM integration for summaries
+* OpenAI integration for summaries
 
 ---
 
